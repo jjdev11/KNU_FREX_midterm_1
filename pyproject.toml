@@ -7,4 +7,5 @@ requires-python = ">=3.13"
 dependencies = [
     "matplotlib>=3.11.2",
     "streamlit>=1.67.0",
+    "streamlit-image-button>=0.2.2.13",
 ]
