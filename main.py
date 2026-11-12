@@ -244,55 +244,68 @@ def view_stats(stats: dict) -> None:
     
 
 def main():
-    # WIP Кнопка головної сторінки для перемикання між сценаріями 
-    if st.button("Головна сторінка", type="tertiary", icon="🏠", width="content"):
-        st.warning("🚧 WIP")
+    if st.button("Головна сторінка", type="tertiary", icon="🏠"):
+        st.session_state.page = "homepage"
 
-    # Тут також буде розділення на Сценарії завдяки кнопкам
+    match st.session_state.page:
+        # Головна сторінка
+        case "homepage":
+            if st.button("Статистика школи", width="stretch"):
+                st.session_state.page = "statistics"
+                st.rerun()
+        # Сторінка Статистики школи (Сценарій №1)
+        case "statistics":
+            pupils, classrooms = load_school_data()
+            
 
-    pupils, classrooms = load_school_data()
-    
+            # Створюємо розділи статистики учнів та списку учнів для зручності
+            tab_statistics, tab_table_pupils = st.tabs(["Статистика учнів","Таблиця учнів"])
 
-    # Створюємо розділи статистики учнів та списку учнів для зручності
-    tab_statistics, tab_table_pupils = st.tabs(["Статистика учнів","Таблиця учнів"])
+            # Розділ статистики учнів
+            with tab_statistics:
+                st.header("Статистика учнів")
+                st.divider()
 
-    # Розділ статистики учнів
-    with tab_statistics:
-        st.header("Статистика учнів")
-        st.divider()
+                # Отримуємо поточну статистику
+                stats = get_stats(pupils, classrooms)
+                # Відображаємо її
+                view_stats(stats)
 
-        # Отримуємо поточну статистику
-        stats = get_stats(pupils, classrooms)
-        # Відображаємо її
-        view_stats(stats)
+                # Здійснюємо переход кожного учня і класу на наступну паралель та зберігаємо в нові словники
+                promoted_pupils: dict[str, Pupil] = {}
+                promoted_classrooms: dict[str, Classroom] = {}
+                for p in pupils.values():
+                    new_p = p.promote()
+                    if new_p is not None:
+                        promoted_pupils[new_p.id] = new_p
+                for c in classrooms.values():
+                    new_c = c.promote()
+                    if new_c is not None:
+                        promoted_classrooms[new_c.name] = new_c
 
-        # Здійснюємо переход кожного учня і класу на наступну паралель та зберігаємо в нові словники
-        promoted_pupils: dict[str, Pupil] = {}
-        promoted_classrooms: dict[str, Classroom] = {}
-        for p in pupils.values():
-            new_p = p.promote()
-            if new_p is not None:
-                promoted_pupils[new_p.id] = new_p
-        for c in classrooms.values():
-            new_c = c.promote()
-            if new_c is not None:
-                promoted_classrooms[new_c.name] = new_c
+                if promoted_pupils:
+                    st.divider()
+                    st.header("Прогноз на наступний рік")
+                    # Отримуємо статистику для наступного року
+                    new_stats = get_stats(promoted_pupils, promoted_classrooms)
+                    # Відображення нової статистики
+                    view_stats(new_stats)
 
-        if promoted_pupils:
-            # Отримуємо статистику для наступного року
-            new_stats = get_stats(promoted_pupils, promoted_classrooms)
-            # Відображення нової статистики
-            view_stats(new_stats)
+            # Розділ списку учнів (відображення CSV-файлу)
+            with tab_table_pupils:
+                st.header("Список учнів")
+                st.write("(усі дані вигадано)")
+                st.divider()
 
-    # Розділ списку учнів (відображення CSV-файлу)
-    with tab_table_pupils:
-        st.header("Список учнів")
-        st.write("(усі дані вигадано)")
-        st.divider()
-
-        with CSV_PATH.open(newline="", encoding=ENCODING) as f:
-            pupils_data = list(csv.DictReader(f))
-        st.dataframe(pupils_data)
+                with CSV_PATH.open(newline="", encoding=ENCODING) as f:
+                    pupils_data = list(csv.DictReader(f))
+                st.dataframe(pupils_data)
+        # У непередбаченому випадку здійснюється перехід до Головної сторінки
+        case _:
+            st.session_state.page = "homepage"
+            st.rerun()
 
 if __name__ == "__main__":
+    if "page" not in st.session_state:
+        st.session_state.page = "homepage"
     main()
