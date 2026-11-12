@@ -1,5 +1,5 @@
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import streamlit as st
@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 CSV_PATH = Path("data/school.csv")
 ENCODING = "utf-8"
+
 
 # Параметри frozen та slots забезпечують те, що дані завантажились лише раз і компактно в оперативну пам'ять
 @dataclass(frozen=True, slots=True)
@@ -21,12 +22,38 @@ class Pupil:
     average_mark: float
     class_name: str
 
+    def promote(self) -> "Pupil | None":
+        parallel, vertical = self.class_name.split("-")
+        next_parallel = int(parallel) + 1
+
+        # Учень випустився
+        if next_parallel > 11:
+            return None
+
+        # Видає копію класу, але з оновленими параметрами, вимога до frozen=True
+        return replace(self, class_name=f"{next_parallel}-{vertical}")
+
 @dataclass(frozen=True, slots=True)
 class Classroom:
     name: str          # Назва класу
     parallel: int      # Паралель (наприклад, 11)
     vertical: str      # Вертикаль (наприклад, "А")
     pupil_ids: tuple[str, ...]  # ID учнів в Класі
+
+    def promote(self) -> "Classroom | None":
+        next_parallel = self.parallel + 1
+
+        # Клас випустився
+        if next_parallel > 11:
+            return None
+
+        # Аналогічно до успішного return в Pupil
+        return replace(
+            self,
+            parallel=next_parallel,
+            name=f"{next_parallel}-{self.vertical}"
+        )
+
 
 # Окрема функція для підвантаження даних учнів
 # Кешуємо дані (хоч ми це не вчили, але це важливо), щоб не зчитувати та обробляти їх багато разів
@@ -50,7 +77,7 @@ def load_school_data() -> (dict[str, Pupil], dict[str, Classroom]):
                 # При записі атрибутів об'єкту явно перевизначаємо їх тип
                 # (Через keyword зручніше)
                 pupil = Pupil(
-                    id=row["id"],
+                    id=int(row["id"]),
                     surname=row["Прізвище"],
                     name=row["Ім'я"],
                     patronymic=row["По-батькові"],
@@ -87,7 +114,7 @@ def load_school_data() -> (dict[str, Pupil], dict[str, Classroom]):
 # Окрема функція для розрахунків статистичної інформації Учнів та Класів
 def get_stats(pupils: dict[str, Pupil], classrooms: dict[str, Classroom]) -> dict:
     if not pupils:
-        st.warning("Помилка: Отримано порожні дані з таблиці")
+        st.warning("Помилка: Словник Учнів порожній")
         return {}
 
     # Кіл-ть учнів та рахування кіл-ті хлопчиків та дівчат
@@ -109,6 +136,17 @@ def get_stats(pupils: dict[str, Pupil], classrooms: dict[str, Classroom]) -> dic
         parallel_sizes[c.parallel] = parallel_sizes.get(c.parallel, 0) + len(c.pupil_ids)
         vertical_sizes[c.vertical] = vertical_sizes.get(c.vertical, 0) + len(c.pupil_ids)
 
+    birthyear_sizes: dict[int, int] = {}
+    # p як скорочення pupil
+    for p in pupils.values():
+        birthyear_sizes[p.birthyear] = birthyear_sizes.get(p.birthyear, 0) + 1
+
+    pupil_classes: list[str] = []
+    pupil_average_marks: list[float] = []
+    for p in pupils.values():
+        pupil_classes.append(p.class_name)
+        pupil_average_marks.append(round(p.average_mark, 2))
+
     # Повертаємо зручний словник значень в статистиці
     return {
         "total": total,
@@ -120,8 +158,90 @@ def get_stats(pupils: dict[str, Pupil], classrooms: dict[str, Classroom]) -> dic
         "min_class": (class_sizes[min_class], min_class),
         # Сортуємо ключі для правильного порядку відображення на графіку
         "parallel_sizes": dict(sorted(parallel_sizes.items())),
-        "vertical_sizes": dict(sorted(vertical_sizes.items()))
+        "vertical_sizes": dict(sorted(vertical_sizes.items())),
+        "birthyear_sizes": dict(sorted(birthyear_sizes.items())),
+        "class_average_marks": (pupil_classes, pupil_average_marks)
     }
+
+# Функція відображення статистики
+def view_stats(stats: dict) -> None:
+    # Відображення кіл-ті учнів та їх відсоткового співвідношення за статю в дві колонки
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"Загальна кількість учнів у школі: {stats["total"]}")
+    with col2:
+        st.write(f"Cпіввідношення хлопців/дівчат: {stats["boys_pct"]}% / {stats["girls_pct"]}%")
+    
+    st.write(f"Середня кіл-ть учнів в класах: {stats["avg_class_size"]}")
+
+    max_size, max_class_name = stats["max_class"]
+    st.write(f"Максимальна кількість учнів: {max_size} (в класі {max_class_name})")
+
+    min_size, min_class_name = stats["min_class"]
+    st.write(f"Мінімальна кількість учнів: {min_size} (в класі {min_class_name})")
+
+    # Переходимо до графіків
+    st.divider()
+
+    # Графік вертикальних стовпчиків розподілу кіл-ті учнів в паралелях
+    ## Створення Графіку
+    fig, ax = plt.subplots()
+    parallel_names = stats["parallel_sizes"].keys()
+    parallel_sizes = stats["parallel_sizes"].values()
+    ax.bar(parallel_names, parallel_sizes)
+    ### Атрибути нашого графіку
+    ax.set_title("Розподіл кількості учнів по паралелях")
+    ax.set_xlabel("Паралелі")
+    ax.set_ylabel("Кіл-ть учнів")
+    ## Відображення графіку
+    st.pyplot(fig)
+    plt.close(fig)
+        
+    # Графік вертикальних стовпчиків розподілу кіл-ті учнів в вертикалях
+    ## Створення Графіку
+    fig, ax = plt.subplots()
+    vertical_names = stats["vertical_sizes"].keys()
+    vertical_sizes = stats["vertical_sizes"].values()
+    ax.bar(vertical_names, vertical_sizes)
+    ### Атрибути нашого графіку
+    ax.set_title("Розподіл кількості учнів по вертикалях")
+    ax.set_xlabel("Вертикалі")
+    ax.set_ylabel("Кіл-ть учнів")
+    ## Відображення графіку
+    st.pyplot(fig)
+    plt.close(fig)
+
+    # Лінійний графік розподілу кіл-ті учнів по року народження
+    ## Створення Графіку
+    fig, ax = plt.subplots()
+    birthyears = stats["birthyear_sizes"].keys()
+    birthyear_sizes = stats["birthyear_sizes"].values()
+    ax.plot(birthyears, birthyear_sizes)
+    ### Атрибути нашого графіку
+    ax.set_title("Розподіл кількості учнів по року народження")
+    ax.set_xlabel("Роки народження")
+    ax.set_ylabel("Кіл-ть учнів")
+    ## Відображення графіку
+    st.pyplot(fig)
+    plt.close(fig)
+
+    # Графік залежності Scatter середньої оцінки учнів від класу
+    ## Створення Графіку
+    fig, ax = plt.subplots()
+    classes = stats["class_average_marks"][0]
+    class_average_marks = stats["class_average_marks"][1]
+    # Додатково додано градієнт Червоний-Жовтий-Зелений для точок в залежності від значення середньої оцінки
+    ax.scatter(classes, class_average_marks, c=class_average_marks, cmap="Greens", vmin=0, vmax=12)
+    ### Атрибути нашого графіку
+    ax.set_title("Розподіл кількості учнів по року народження")
+    ax.set_xlabel("Клас")
+    ax.set_ylabel("Середні оцінки")
+    ## Написи на осі x під кутом та зменшені
+    ax.tick_params(axis="x", rotation=45, labelsize=8)
+    ## Відображення графіку
+    st.pyplot(fig)
+    plt.close(fig)
+    
 
 def main():
     # WIP Кнопка головної сторінки для перемикання між сценаріями 
@@ -131,7 +251,7 @@ def main():
     # Тут також буде розділення на Сценарії завдяки кнопкам
 
     pupils, classrooms = load_school_data()
-    stats = get_stats(pupils, classrooms)
+    
 
     # Створюємо розділи статистики учнів та списку учнів для зручності
     tab_statistics, tab_table_pupils = st.tabs(["Статистика учнів","Таблиця учнів"])
@@ -141,54 +261,28 @@ def main():
         st.header("Статистика учнів")
         st.divider()
 
-        # Відображення кіл-ті учнів та їх відсоткового співвідношення за статю в дві колонки
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"Загальна кількість учнів у школі: {stats["total"]}")
-        with col2:
-            st.write(f"Cпіввідношення хлопців/дівчат: {stats["boys_pct"]}% / {stats["girls_pct"]}%")
-        
-        st.write(f"Середня кіл-ть учнів в класах: {stats["avg_class_size"]}")
+        # Отримуємо поточну статистику
+        stats = get_stats(pupils, classrooms)
+        # Відображаємо її
+        view_stats(stats)
 
-        max_size, max_class_name = stats["max_class"]
-        st.write(f"Максимальна кількість учнів: {max_size} (в класі {max_class_name})")
+        # Здійснюємо переход кожного учня і класу на наступну паралель та зберігаємо в нові словники
+        promoted_pupils: dict[str, Pupil] = {}
+        promoted_classrooms: dict[str, Classroom] = {}
+        for p in pupils.values():
+            new_p = p.promote()
+            if new_p is not None:
+                promoted_pupils[new_p.id] = new_p
+        for c in classrooms.values():
+            new_c = c.promote()
+            if new_c is not None:
+                promoted_classrooms[new_c.name] = new_c
 
-        min_size, min_class_name = stats["min_class"]
-        st.write(f"Мінімальна кількість учнів: {min_size} (в класі {min_class_name})")
-
-        # Переходимо до графіків
-        st.divider()
-
-        # Графік вертикальних стовпчиків розподілу кіл-ті учнів в паралелях
-        ## Створення Графіку
-        fig, ax = plt.subplots()
-        parallel_names = stats["parallel_sizes"].keys()
-        parallel_sizes = stats["parallel_sizes"].values()
-        ax.bar(parallel_names, parallel_sizes)
-        ### Атрибути нашого графіку
-        ax.set_title("Розподіл кількості учнів по паралелях")
-        ax.set_xlabel("Паралелі")
-        ax.set_ylabel("Кіл-ть учнів")
-        ## Відображення графіку
-        st.pyplot(fig)
-        plt.close(fig)
-
-
-
-        # Графік вертикальних стовпчиків розподілу кіл-ті учнів в вертикалях
-        ## Створення Графіку
-        fig, ax = plt.subplots()
-        vertical_names = stats["vertical_sizes"].keys()
-        vertical_sizes = stats["vertical_sizes"].values()
-        ax.bar(vertical_names, vertical_sizes)
-        ### Атрибути нашого графіку
-        ax.set_title("Розподіл кількості учнів по вертикалях")
-        ax.set_xlabel("Вертикалі")
-        ax.set_ylabel("Кіл-ть учнів")
-        ## Відображення графіку
-        st.pyplot(fig)
-        plt.close(fig)
-
+        if promoted_pupils:
+            # Отримуємо статистику для наступного року
+            new_stats = get_stats(promoted_pupils, promoted_classrooms)
+            # Відображення нової статистики
+            view_stats(new_stats)
 
     # Розділ списку учнів (відображення CSV-файлу)
     with tab_table_pupils:
@@ -198,7 +292,7 @@ def main():
 
         with CSV_PATH.open(newline="", encoding=ENCODING) as f:
             pupils_data = list(csv.DictReader(f))
-        st.table(pupils_data)
+        st.dataframe(pupils_data)
 
 if __name__ == "__main__":
     main()
