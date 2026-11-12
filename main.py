@@ -1,99 +1,137 @@
 import csv
-import matplotlib.pyplot as plt
+from dataclasses import dataclass
+from pathlib import Path
 
 import streamlit as st
+import matplotlib.pyplot as plt
 
+
+CSV_PATH = Path("data/school.csv")
+ENCODING = "utf-8"
+
+# Параметри frozen та slots забезпечують те, що дані завантажились лише раз і компактно в оперативну пам'ять
+@dataclass(frozen=True, slots=True)
 class Pupil:
-    total_pupils = 0
-    total_boys = 0
-    total_girls = 0
+    id: str
+    surname: str
+    name: str
+    patronymic: str
+    birthyear: int
+    sex: str
+    average_mark: float
+    class_name: str
 
-    def __init__(self, surname: str, name: str, patronymic: str, birthyear: int, sex: str, average_mark: float):
-        Pupil.total_pupils += 1
-        
-        self.surname = surname
-        self.name = name
-        self.patronymic = patronymic
-        
-        self.birthyear = birthyear
-        self.sex = sex
-        if sex == "Ч":
-            Pupil.total_boys += 1
-        else:
-            Pupil.total_girls += 1
-
-        # Інкапсулюємо значення середньої оцінки, щоб буцімто не можна було "підправити" оцінку
-        self._average_mark = average_mark
-
+@dataclass(frozen=True, slots=True)
 class Classroom:
-    num_of_classrooms = 0
-    # Список наявних паралелей та вертикалей для подальшої ітерації в розрахунках
-    parallels = []
-    verticals = []
+    name: str          # Назва класу
+    parallel: int      # Паралель (наприклад, 11)
+    vertical: str      # Вертикаль (наприклад, "А")
+    pupil_ids: tuple[str, ...]  # ID учнів в Класі
 
-    def __init__(self, parallel: int, vertical: str):
-        Classroom.num_of_classrooms += 1
+# Окрема функція для підвантаження даних учнів
+# Кешуємо дані (хоч ми це не вчили, але це важливо), щоб не зчитувати та обробляти їх багато разів
+@st.cache_data(show_spinner="Завантаження даних...")
+def load_school_data() -> (dict[str, Pupil], dict[str, Classroom]):
+    # Якщо дані не завантажились чи шлях невалідний, то явно виведеться помилка
+    if not CSV_PATH.exists():
+        st.error("Файл не знайдено: {CSV_PATH}")
+        st.stop()
 
-        # Інкапсулюємо значення паралелі, бо переходом між класами займається окремий метод
-        self._parallel = parallel
-        self.vertical = vertical
-        # Додаємо паралель та вертикаль до списку існуючих
-        if parallel not in Classroom.parallels:
-            Classroom.parallels.append(parallel)
-        if vertical not in Classroom.verticals:
-            Classroom.verticals.append(vertical)
-        # Інкапсулюємо список однокласників, бо він mutable
-        self._classmates = []
+    # Type hints в словниках, де зберігаються об'єкти Учнів та Класів
+    pupils: dict[str, Pupil] = {}
+    classrooms: dict[str, Classroom] = {}
+    class_pupil_ids: dict[str, list[str]] = {}
 
-    @property
-    def parallel(self):
-        return self._parallel
+    # newline="" важливий для сумісності під час зчитування .csv
+    with CSV_PATH.open(newline="", encoding=ENCODING) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                # При записі атрибутів об'єкту явно перевизначаємо їх тип
+                # (Через keyword зручніше)
+                pupil = Pupil(
+                    id=row["id"],
+                    surname=row["Прізвище"],
+                    name=row["Ім'я"],
+                    patronymic=row["По-батькові"],
+                    birthyear=int(row["Рік народження"]),
+                    sex=row["Стать"],
+                    average_mark=float(row["Середній бал"]),
+                    class_name=row["Клас"]
+                )
+            # Щоб довго не возитись з помилками через записи в таблиці
+            # ...передбачаємо їх явно і відображаємо в Streamlit
+            except (KeyError, ValueError) as e:
+                st.warning(f"Пропущено {row.get("id")}: помилка - {e}")
+                # Переходимо до наступного учня в таблиці
+                continue
 
-    @property
-    def classmates(self) -> list:
-        return self.classmates.copy()
+            pupils[pupil.id] = pupil
+            # Створюємо пустий список для ключа, якщо він не існує, а потім додаємо туди id учня
+            class_pupil_ids.setdefault(pupil.class_name, []).append(pupil.id)
 
-    def add_pupil(self, pupil: Pupil) -> None:
-        self._classmates.append(pupil)
+    # Враховуючи те, що всі помилки покриті перевірками...
+    # можемо записати створення Класів з учнями як dict comprehensions
+    classrooms = {
+        name: Classroom(
+            name=name,
+            # Завдяки знаку "-" в назві класу його легко поділити на паралель та вертикаль
+            parallel=int(name.split("-")[0]), 
+            vertical=name.split("-")[1],
+            pupil_ids=tuple(ids)
+        )
+        for name, ids in class_pupil_ids.items()
+    }
+    return pupils, classrooms
 
-    def get_num_of_pupils(self):
-        return len(self._classmates)
+# Окрема функція для розрахунків статистичної інформації Учнів та Класів
+def get_stats(pupils: dict[str, Pupil], classrooms: dict[str, Classroom]) -> dict:
+    if not pupils:
+        st.warning("Помилка: Отримано порожні дані з таблиці")
+        return {}
+
+    # Кіл-ть учнів та рахування кіл-ті хлопчиків та дівчат
+    total = len(pupils)
+    boys = sum(1 for pupil in pupils.values() if pupil.sex == "Ч")
+    girls = total - boys
+
+    class_sizes = {name: len(classroom.pupil_ids) for name, classroom in classrooms.items()}
+    # max/min перебирають ключі в class_sizes і знаходить ключ з max/min кіл-тю учнів
+    max_class = max(class_sizes, key=class_sizes.get)
+    min_class = min(class_sizes, key=class_sizes.get)
+
+    # Кіл-ть учнів в паралелях та вертикалях
+    parallel_sizes: dict[int, int] = {}
+    vertical_sizes: dict[str, int] = {}
+    # c як скорочення classroom
+    for c in classrooms.values():
+        # .get, до речі, дозволяє безпечно добути значення за ключем в словнику
+        parallel_sizes[c.parallel] = parallel_sizes.get(c.parallel, 0) + len(c.pupil_ids)
+        vertical_sizes[c.vertical] = vertical_sizes.get(c.vertical, 0) + len(c.pupil_ids)
+
+    # Повертаємо зручний словник значень в статистиці
+    return {
+        "total": total,
+        "boys_pct": round(boys / total * 100, 1),
+        "girls_pct": round(girls / total * 100, 1),
+        "avg_class_size": round(total / len(classrooms), 1),
+        "class_sizes": class_sizes,
+        "max_class": (class_sizes[max_class], max_class),
+        "min_class": (class_sizes[min_class], min_class),
+        # Сортуємо ключі для правильного порядку відображення на графіку
+        "parallel_sizes": dict(sorted(parallel_sizes.items())),
+        "vertical_sizes": dict(sorted(vertical_sizes.items()))
+    }
 
 def main():
-    # Кнопка головної сторінки для перемикання між сценаріями
+    # WIP Кнопка головної сторінки для перемикання між сценаріями 
     if st.button("Головна сторінка", type="tertiary", icon="🏠", width="content"):
-        st.write("Перехід до головної сторінки")
+        st.warning("🚧 WIP")
 
-    # Зчитуємо дані та зберігаємо у вигляді списку з словниками
-    with open("data/school.csv", "r", encoding="utf-8") as f:
-        pupils_data = list(csv.DictReader(f))
+    # Тут також буде розділення на Сценарії завдяки кнопкам
 
-    # Завдяки отриманим даним створюємо об'єкти учнів та їх класів
-    pupils = {}
-    classrooms = {}
-    for data in pupils_data:
-        pupil_id = data["id"]
-        class_name = data["Клас"]
-
-        # Створюємо об'єкт учня...
-        pupil = Pupil(
-            surname=data["Прізвище"],
-            name=data["Ім'я"],
-            patronymic=data["По-батькові"],
-            birthyear=data["Рік народження"],
-            sex=data["Стать"],
-            average_mark=data["Середній бал"]
-        )
-        # та додаємо його до списку учнів
-        pupils[pupil_id] = pupil
-        
-        # Якщо клас вже існує, то його створення не продублюється
-        if class_name not in classrooms:
-            parallel, vertical = class_name.split("-")
-            classrooms[class_name] = Classroom(parallel, vertical)
-
-        # Додаємо учня до списку однокласників
-        classrooms[class_name].add_pupil(pupil)
+    pupils, classrooms = load_school_data()
+    stats = get_stats(pupils, classrooms)
 
     # Створюємо розділи статистики учнів та списку учнів для зручності
     tab_statistics, tab_table_pupils = st.tabs(["Статистика учнів","Таблиця учнів"])
@@ -103,76 +141,63 @@ def main():
         st.header("Статистика учнів")
         st.divider()
 
-        st.write(f"Загальна кількість учнів у школі: {Pupil.total_pupils}")
+        # Відображення кіл-ті учнів та їх відсоткового співвідношення за статю в дві колонки
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"Загальна кількість учнів у школі: {stats["total"]}")
+        with col2:
+            st.write(f"Cпіввідношення хлопців/дівчат: {stats["boys_pct"]}% / {stats["girls_pct"]}%")
+        
+        st.write(f"Середня кіл-ть учнів в класах: {stats["avg_class_size"]}")
 
-        # Завдяки атрибутам класу Pupil рахуємо відсоткове співвідношення хлопців та дівчат
-        boy_percentage = round(Pupil.total_boys / Pupil.total_pupils, 1) * 100
-        girl_percentage = 100-boy_percentage
-        st.write(f"Відсоткове співвідношення хлопців/дівчат в класах: {boy_percentage}% / {girl_percentage}%")
+        max_size, max_class_name = stats["max_class"]
+        st.write(f"Максимальна кількість учнів: {max_size} (в класі {max_class_name})")
 
-        # Завдяки атрибутам класів рахуємо середню кіл-ть учнів в класах
-        average_num_of_pupils = round(Pupil.total_pupils / Classroom.num_of_classrooms, 1)
-        st.write(f"Середня кількість учнів в класі: {average_num_of_pupils}")
-
-        # Завдяки dict comprehension отримуємо словник, де ключ це клас, а його елемент це його кіл-ть учнів
-        classes_num_of_pupils = {name: classroom.get_num_of_pupils() for name, classroom in classrooms.items()}
-        # Шукаємо максимальну кількість учнів в класі, знаючи, що кількість учнів є другим елементом кортежу
-        class_name_max, max_num_of_pupils = max(classes_num_of_pupils.items(), key=lambda x: x[1])
-        st.write(f"Максимальна кількість учнів: {max_num_of_pupils} (в класі {class_name_max})")
-
-        # Аналогічно шукаємо мінімальну кількість учнів...
-        class_name_min, min_num_of_pupils = min(classes_num_of_pupils.items(), key=lambda x: x[1])
-        st.write(f"Мінімальна кількість учнів: {min_num_of_pupils} (в класі {class_name_min})")
+        min_size, min_class_name = stats["min_class"]
+        st.write(f"Мінімальна кількість учнів: {min_size} (в класі {min_class_name})")
 
         # Переходимо до графіків
         st.divider()
 
         # Графік вертикальних стовпчиків розподілу кіл-ті учнів в паралелях
-        ## Підготовка даних
-        parallels_num_of_pupils = []
-        for curr_parallel in Classroom.parallels:
-            # list comprehensions для фільтрування кіл-ті учнів визначеної паралелі
-            curr_num_of_pupils = sum([
-                classroom.get_num_of_pupils() for classroom in classrooms.values()
-                if classroom.parallel == curr_parallel
-            ])
-            parallels_num_of_pupils.append(curr_num_of_pupils)
         ## Створення Графіку
         fig, ax = plt.subplots()
-        ax.bar(Classroom.parallels, parallels_num_of_pupils)
+        parallel_names = stats["parallel_sizes"].keys()
+        parallel_sizes = stats["parallel_sizes"].values()
+        ax.bar(parallel_names, parallel_sizes)
         ### Атрибути нашого графіку
         ax.set_title("Розподіл кількості учнів по паралелях")
         ax.set_xlabel("Паралелі")
         ax.set_ylabel("Кіл-ть учнів")
         ## Відображення графіку
         st.pyplot(fig)
+        plt.close(fig)
+
+
 
         # Графік вертикальних стовпчиків розподілу кіл-ті учнів в вертикалях
-        ## Підготовка даних (аналогічно)
-        verticals_num_of_pupils = []
-        for curr_vertical in Classroom.verticals:
-            # list comprehensions для фільтрування кіл-ті учнів визначеної паралелі
-            curr_num_of_pupils = sum([
-                classroom.get_num_of_pupils() for classroom in classrooms.values()
-                if classroom.vertical == curr_vertical
-            ])
-            verticals_num_of_pupils.append(curr_num_of_pupils)
         ## Створення Графіку
         fig, ax = plt.subplots()
-        ax.bar(Classroom.verticals, verticals_num_of_pupils)
+        vertical_names = stats["vertical_sizes"].keys()
+        vertical_sizes = stats["vertical_sizes"].values()
+        ax.bar(vertical_names, vertical_sizes)
         ### Атрибути нашого графіку
         ax.set_title("Розподіл кількості учнів по вертикалях")
         ax.set_xlabel("Вертикалі")
         ax.set_ylabel("Кіл-ть учнів")
         ## Відображення графіку
         st.pyplot(fig)
+        plt.close(fig)
 
-    # Розділ списку учнів
+
+    # Розділ списку учнів (відображення CSV-файлу)
     with tab_table_pupils:
         st.header("Список учнів")
         st.write("(усі дані вигадано)")
         st.divider()
 
+        with CSV_PATH.open(newline="", encoding=ENCODING) as f:
+            pupils_data = list(csv.DictReader(f))
         st.table(pupils_data)
 
 if __name__ == "__main__":
