@@ -25,6 +25,8 @@ class Employee:
     work_experience:int
     management_experience:int
 
+    # Коефіцієнт впливу стажу роботи працівника на його зарплатню переписано за логікою...
+    # (1 + стаж / кіл-ть років стажу до подвоєння зарплати без урахування досвіду управління)
     def get_salary(self):
         match self.job_title:
             case "Директор":
