@@ -61,7 +61,7 @@ class Classroom:
 def load_school_data() -> (dict[str, Pupil], dict[str, Classroom]):
     # Якщо дані не завантажились чи шлях невалідний, то явно виведеться помилка
     if not CSV_PATH.exists():
-        st.error("Файл не знайдено: {CSV_PATH}")
+        st.error(f"Файл не знайдено: {CSV_PATH}")
         st.stop()
 
     # Type hints в словниках, де зберігаються об'єкти Учнів та Класів
@@ -70,6 +70,7 @@ def load_school_data() -> (dict[str, Pupil], dict[str, Classroom]):
     class_pupil_ids: dict[str, list[str]] = {}
 
     # newline="" важливий для сумісності під час зчитування .csv
+    # За умовчанням виставлений режим читання
     with CSV_PATH.open(newline="", encoding=ENCODING) as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -89,7 +90,7 @@ def load_school_data() -> (dict[str, Pupil], dict[str, Classroom]):
             # Щоб довго не возитись з помилками через записи в таблиці
             # ...передбачаємо їх явно і відображаємо в Streamlit
             except (KeyError, ValueError) as e:
-                st.warning(f"Пропущено {row.get("id")}: помилка - {e}")
+                st.warning(f"Пропущено {row.get('id')}: помилка - {e}")
                 # Переходимо до наступного учня в таблиці
                 continue
 
