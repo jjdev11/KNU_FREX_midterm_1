@@ -49,9 +49,9 @@ def load_school_data() -> (dict[str, Student], dict[str, Classroom]):
                 # Переходимо до наступного учня в таблиці
                 continue
 
-            students[student.id] = student
+            students[student.s_id] = student
             # Створюємо пустий список для ключа, якщо він не існує, а потім додаємо туди id учня
-            class_student_ids.setdefault(student.class_name, []).append(student.id)
+            class_student_ids.setdefault(student.class_name, []).append(student.s_id)
 
     # Враховуючи те, що всі помилки покриті перевірками...
     # можемо записати створення Класів з учнями як dict comprehensions
